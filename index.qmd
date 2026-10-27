@@ -1,0 +1,354 @@
+---
+title: "Registro y análisis de infraestructura de acueductos"
+subtitle: "Aplicación con datos de conducción de Cajón de Boruca"
+author: "Marcos Chaves Ulate"
+lang: es
+language:
+  title-block-author-single: "Autor"
+  title-block-author-plural: "Autores"
+format:
+  html:
+    toc: true
+    toc-title: "Contenido"
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Mostrar código en R"
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## Introducción
+
+El propósito de este ejercicio es mostrar cómo se pueden organizar y analizar en R los datos registrados durante el levantamiento de infraestructura de un sistema de acueducto. El mismo esquema de registro podría utilizarse para elementos de **conducción** y **distribución**, incorporando tanto su ubicación y características técnicas como su condición física, estado operativo y posibles afectaciones.
+
+Se utiliza como ejemplo un levantamiento del acueducto de **Cajón de Boruca**, que comprende tuberías de conducción entre nacientes y tanques, así como estructuras relacionadas. Este inventario **no incluye mediciones de la red de distribución**. Por lo tanto, las válvulas y otros elementos previstos para esa etapa se presentan como opciones de registro, no como elementos observados en el caso estudiado.
+
+El análisis se concentra en tres preguntas: ¿cuántos componentes se encuentran operativos o presentan afectaciones?, ¿qué tipos de infraestructura están asociados con esas afectaciones? y ¿cómo se distribuyen los estados reportados entre los registros de tubería? La tabla de atributos permite además ilustrar qué información podría consultar una herramienta de registro de campo.
+
+## Información que podría registrarse en campo
+
+Para utilizar una misma estructura de datos en distintos acueductos, el registro debería identificar el componente y el sector del sistema al que pertenece. Se propone considerar, entre otros, los siguientes campos:
+
+| Grupo de datos | Campos de registro propuestos |
+|:--|:--|
+| Identificación | ID, fecha, proyecto, sector (conducción o distribución), tipo de elemento y descripción |
+| Ubicación | Coordenadas Este y Norte, sistema de referencia, elevación y observaciones de localización |
+| Características técnicas | Diámetro, material, tipo de tubería o válvula, según corresponda |
+| Evaluación | Condición física, estado operativo, presencia y tipo de afectación, consecuencia y observaciones |
+| Seguimiento | Fecha de inspección, intervención requerida y estado de atención, cuando se cuente con esos datos |
+
+Los elementos que podría registrar la herramienta incluyen nacientes, captaciones, tanques de almacenamiento, tanques quiebra gradiente y tuberías, además de los siguientes tipos de válvula que pueden encontrarse en una red de distribución:
+
+| Código | Elemento |
+|:--|:--|
+| VA | Válvula de aire |
+| VC | Válvula de compuerta o de cierre |
+| VRP | Válvula reguladora de presión |
+| VP | Válvula de purga |
+| VS | Válvula sostenedora de presión |
+
+**Estas categorías corresponden al alcance propuesto de una futura herramienta de captura de datos.** No se agregaron registros ficticios de válvulas ni de tuberías de distribución al conjunto de datos de Cajón de Boruca. Este documento Quarto presenta el procesamiento y la consulta de los datos, no una aplicación de captura de campo terminada.
+
+## Datos del caso de ejemplo
+
+Se emplean dos archivos CSV: uno con los puntos de infraestructura y otro con los registros de tubería de conducción. La fecha consignada en los archivos es el **9 de abril de 2025**. Los puntos disponen de coordenadas CRTM05 (EPSG:5367) y elevación en metros. Los registros lineales utilizados aquí no incluyen la geometría ni la longitud de cada tubería.
+
+En los archivos de origen, algunos tanques y tramos de tubería aparecen con el estado **«Sin verificar»**. Durante la revisión de este ejercicio, el autor aclaró que **cinco estructuras puntuales y cinco registros de tubería corresponden a componentes verificados, operativos y en buen estado**. Esa aclaración se aplica en R, sin modificar los archivos originales. Como no se indicó la fecha específica de esa comprobación, no se atribuye automáticamente al 9 de abril de 2025.
+
+### Importación y exploración
+
+Se utilizan `readr`, `dplyr` y `ggplot2` del conjunto `tidyverse`. Los CSV se buscan primero en la carpeta del documento; si no están allí, se leen desde el repositorio del ejercicio en GitHub. Esto permite trabajar con una copia local o con los archivos publicados.
+
+```{r}
+#| label: cargar-datos
+library(tidyverse)
+library(DT)
+library(plotly)
+
+url_base <- "https://raw.githubusercontent.com/Mrxs4915/Tarea-2-cursoR/main"
+
+leer_inventario <- function(nombre_archivo) {
+  if (file.exists(nombre_archivo)) {
+    readr::read_csv(nombre_archivo, show_col_types = FALSE)
+  } else {
+    readr::read_csv(paste0(url_base, "/", nombre_archivo),
+                    show_col_types = FALSE)
+  }
+}
+
+puntos_originales <- leer_inventario("infraestructura_cajon_boruca.csv")
+tuberias_originales <- leer_inventario("tuberias_cajon_boruca.csv")
+
+cat("Puntos:", nrow(puntos_originales), "\n")
+cat("Tramos de tubería:", nrow(tuberias_originales), "\n")
+glimpse(puntos_originales)
+glimpse(tuberias_originales)
+```
+
+### Preparación y actualización de las categorías
+
+Los campos `estado_origen` y `condicion_origen` conservan lo que indica cada CSV. A partir de la aclaración del autor, se actualizan solo los registros originalmente marcados como «Sin verificar». Los dos puntos afectados mantienen su condición registrada y los elementos propuestos o provisionales se clasifican por separado.
+
+```{r}
+#| label: preparar-puntos
+puntos <- puntos_originales |>
+  mutate(
+    estado_origen = estado,
+    condicion_origen = condicion_fisica,
+    origen_aclaracion = if_else(
+      estado_origen == "Sin verificar",
+      "Condición confirmada por el autor; fecha de inspección no indicada",
+      "Inventario original"
+    ),
+    estado = if_else(estado_origen == "Sin verificar", "Operativo", estado),
+    condicion_fisica = if_else(condicion_origen == "Sin verificar",
+                               "Buen estado", condicion_fisica),
+    estado_resumen = case_when(
+      tipo_afectacion == "Deslizamiento" |
+        estado %in% c("Afectado; perdió su captación", "Fuera de servicio") ~
+        "Con afectación",
+      estado == "Operativo" ~ "Operativo y en buen estado",
+      estado %in% c("Propuesto", "Provisional") ~ "Propuesto o provisional",
+      TRUE ~ "Otro estado"
+    ),
+    estado_resumen = factor(
+      estado_resumen,
+      levels = c("Operativo y en buen estado", "Con afectación",
+                 "Propuesto o provisional", "Otro estado")
+    )
+  ) |>
+  arrange(id_punto)
+
+resumen_puntos <- puntos |>
+  count(estado_resumen, name = "cantidad", .drop = FALSE) |>
+  filter(cantidad > 0)
+
+resumen_puntos
+```
+
+En las tuberías se conserva la clasificación **«Inexistente»** del archivo, sin interpretarla como una rotura o como un daño causado por el deslizamiento. El registro propuesto también se mantiene separado de los tramos existentes y operativos.
+
+```{r}
+#| label: preparar-tuberias
+tuberias <- tuberias_originales |>
+  mutate(
+    estado_origen = estado_tramo,
+    condicion_origen = condicion_fisica,
+    origen_aclaracion = if_else(
+      estado_origen == "Sin verificar",
+      "Condición confirmada por el autor; fecha de inspección no indicada",
+      "Inventario original"
+    ),
+    estado_tramo = if_else(estado_origen == "Sin verificar",
+                           "Operativo", estado_tramo),
+    condicion_fisica = if_else(condicion_origen == "Sin verificar",
+                               "Buen estado", condicion_fisica),
+    estado_resumen = case_when(
+      estado_tramo == "Operativo" ~ "Operativo y en buen estado",
+      estado_tramo == "Propuesto" ~ "Propuesto",
+      str_detect(estado_tramo, "Inexistente") ~ "Inexistente",
+      TRUE ~ "Otro estado"
+    ),
+    estado_resumen = factor(
+      estado_resumen,
+      levels = c("Operativo y en buen estado", "Propuesto",
+                 "Inexistente", "Otro estado")
+    ),
+    diametro_pulg = as.numeric(diametro_pulg)
+  ) |>
+  arrange(id_tramo)
+
+resumen_tuberias <- tuberias |>
+  count(estado_resumen, name = "cantidad", .drop = FALSE) |>
+  filter(cantidad > 0)
+
+resumen_tuberias
+```
+
+## Consulta de los registros
+
+### Infraestructura puntual
+
+La tabla permite buscar elementos, comparar su estado original con la clasificación utilizada en el análisis y consultar su ubicación y sus afectaciones. La aclaración del autor se mantiene identificada para distinguirla de la información contenida originalmente en los CSV.
+
+```{r}
+#| label: tabla-puntos
+DT::datatable(
+  puntos |>
+    transmute(
+      ID = id_punto,
+      Elemento = descripcion_original,
+      Tipo = tipo_elemento,
+      `Estado utilizado` = estado,
+      `Condición física` = condicion_fisica,
+      `Estado del CSV` = estado_origen,
+      Afectación = tipo_afectacion,
+      Consecuencia = consecuencia,
+      `Este CRTM05 (m)` = este_crtm05_m,
+      `Norte CRTM05 (m)` = norte_crtm05_m,
+      `Elevación (m)` = elevacion_m,
+      `Origen de la condición` = origen_aclaracion
+    ),
+  rownames = FALSE,
+  options = list(
+    pageLength = 9, scrollX = TRUE,
+    language = list(
+      search = "Buscar:",
+      lengthMenu = "Mostrar _MENU_ registros",
+      info = "Mostrando _START_ a _END_ de _TOTAL_ registros",
+      infoEmpty = "No hay registros",
+      zeroRecords = "No se encontraron registros",
+      paginate = list(previous = "Anterior", `next` = "Siguiente")
+    )
+  )
+) |>
+  DT::formatRound(
+    columns = c("Este CRTM05 (m)", "Norte CRTM05 (m)", "Elevación (m)"),
+    digits = 3, mark = " ", dec.mark = ","
+  )
+```
+
+### Tuberías de conducción
+
+```{r}
+#| label: tabla-tuberias
+DT::datatable(
+  tuberias |>
+    transmute(
+      `ID del tramo` = id_tramo,
+      Descripción = descripcion_original,
+      `Diámetro (pulgadas)` = diametro_pulg,
+      `Estado utilizado` = estado_tramo,
+      `Condición física` = condicion_fisica,
+      `Estado del CSV` = estado_origen,
+      `Afectación en el CSV` = tipo_afectacion,
+      `Origen de la condición` = origen_aclaracion
+    ),
+  rownames = FALSE,
+  options = list(
+    pageLength = 7, scrollX = TRUE,
+    language = list(
+      search = "Buscar:",
+      info = "Mostrando _START_ a _END_ de _TOTAL_ registros",
+      paginate = list(previous = "Anterior", `next` = "Siguiente")
+    )
+  )
+) |>
+  DT::formatRound("Diámetro (pulgadas)", digits = 1, dec.mark = ",")
+```
+
+## Visualización de condiciones y afectaciones
+
+Los gráficos siguientes resumen los registros existentes del caso de ejemplo. Los conteos corresponden a **puntos o registros de tramos**, no a cantidades de infraestructura de toda la red ni a longitudes de tubería.
+
+### Condición de los puntos de infraestructura
+
+```{r}
+#| label: fig-estado-puntos
+#| fig-cap: "Figura 1. Estado de los puntos de infraestructura de conducción. Datos del inventario de Cajón de Boruca y aclaraciones del autor."
+grafico_estado <- ggplot(
+  resumen_puntos,
+  aes(
+    x = estado_resumen, y = cantidad, fill = estado_resumen,
+    text = paste0("Condición: ", estado_resumen,
+                  "<br>Número de puntos: ", cantidad)
+  )
+) +
+  geom_col(width = 0.62) +
+  geom_text(aes(label = cantidad), vjust = -0.35, show.legend = FALSE) +
+  scale_fill_manual(values = c(
+    "Operativo y en buen estado" = "#317873",
+    "Con afectación" = "#C34D4D",
+    "Propuesto o provisional" = "#4D84B3",
+    "Otro estado" = "#8A8A8A"
+  )) +
+  scale_y_continuous(breaks = 0:6, expand = expansion(mult = c(0, 0.14))) +
+  labs(title = "Condición de los puntos de infraestructura",
+       x = NULL, y = "Número de puntos") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 10, hjust = 1))
+
+plotly::ggplotly(grafico_estado, tooltip = "text") |>
+  plotly::config(displaylogo = FALSE)
+```
+
+De los nueve puntos levantados, **cinco corresponden a estructuras operativas y en buen estado**, **dos presentan afectaciones** y **dos están clasificados como propuestos o provisionales**. Los dos puntos afectados son las nacientes 1 y 2.
+
+### Condición por tipo de elemento
+
+```{r}
+#| label: fig-estado-tipo
+#| fig-cap: "Figura 2. Condición por tipo de elemento puntual. Datos del inventario de Cajón de Boruca y aclaraciones del autor."
+resumen_por_tipo <- puntos |>
+  count(tipo_elemento, estado_resumen, name = "cantidad")
+
+ggplot(resumen_por_tipo,
+       aes(x = tipo_elemento, y = cantidad, fill = estado_resumen)) +
+  geom_col(width = 0.66) +
+  coord_flip() +
+  scale_fill_manual(values = c(
+    "Operativo y en buen estado" = "#317873",
+    "Con afectación" = "#C34D4D",
+    "Propuesto o provisional" = "#4D84B3",
+    "Otro estado" = "#8A8A8A"
+  )) +
+  scale_y_continuous(breaks = 0:5, expand = expansion(mult = c(0, 0.08))) +
+  labs(title = "Condición por tipo de infraestructura",
+       x = NULL, y = "Número de puntos", fill = "Condición") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+```
+
+Las afectaciones conocidas se encuentran en las nacientes: la **Naciente 1 quedó enterrada por un deslizamiento** y la **Naciente 2 quedó expuesta y perdió su captación**, en un sitio con cobertura de cascajo. Los tanques de almacenamiento y quiebra gradiente se consideran operativos y en buen estado según la aclaración del autor. La Naciente 3 permanece como fuente propuesta y su captación asociada es provisional.
+
+### Estado de los registros de tubería
+
+```{r}
+#| label: fig-estado-tuberias
+#| fig-cap: "Figura 3. Estado de los registros de tubería de conducción. Datos del inventario de Cajón de Boruca y aclaraciones del autor."
+ggplot(resumen_tuberias,
+       aes(x = estado_resumen, y = cantidad, fill = estado_resumen)) +
+  geom_col(width = 0.62) +
+  geom_text(aes(label = cantidad), vjust = -0.35, show.legend = FALSE) +
+  scale_fill_manual(values = c(
+    "Operativo y en buen estado" = "#317873",
+    "Propuesto" = "#4D84B3",
+    "Inexistente" = "#BE9447",
+    "Otro estado" = "#8A8A8A"
+  )) +
+  scale_y_continuous(breaks = 0:6, expand = expansion(mult = c(0, 0.14))) +
+  labs(title = "Estado de las tuberías de conducción",
+       x = NULL, y = "Número de registros") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 10, hjust = 1))
+```
+
+De los siete registros lineales, **cinco corresponden a tuberías operativas y en buen estado**, uno está propuesto y uno se clasifica como inexistente. El registro inexistente no se contabiliza automáticamente como un daño, porque el inventario no establece su causa. Tampoco se dispone de longitudes para estimar kilómetros de tubería por condición.
+
+## Discusión y posibilidades de aplicación
+
+La información de Cajón de Boruca permite demostrar cómo un registro de campo puede transformarse en tablas consultables y resúmenes de condición de infraestructura. En este ejemplo, los daños documentados se limitan a dos nacientes, mientras que los demás componentes existentes evaluados se consideran operativos de acuerdo con la aclaración del autor.
+
+Para extender este procedimiento a redes de **distribución**, el formulario de captura tendría que admitir elementos como VA, VC, VRP, VP y VS, además de tuberías y otras estructuras. La identificación por código, la ubicación, las características técnicas y el estado de cada elemento permitirían repetir los mismos conteos y comparaciones sin cambiar el propósito del análisis. **Esta ampliación es una propuesta de registro, no un resultado obtenido con los datos de Cajón de Boruca.**
+
+El conjunto utilizado contiene nueve puntos y siete registros de tubería, y no incluye información sobre la longitud ni la geometría de las líneas. Tampoco contiene un historial de daños, fechas de reparación o seguimiento. Por esas razones, los gráficos representan una clasificación del inventario disponible, sin permitir un análisis temporal ni una estimación de la infraestructura afectada en toda la red.
+
+## Conclusiones
+
+El ejercicio muestra una forma de preparar y analizar datos de infraestructura de acueductos mediante R y `tidyverse`, utilizando el levantamiento de conducción de Cajón de Boruca como ejemplo. Las tablas interactivas permiten consultar los atributos de cada elemento y los gráficos diferencian componentes operativos, afectados y propuestos.
+
+La clasificación resultante incluye cinco puntos operativos y en buen estado, dos afectados y dos propuestos o provisionales. En las tuberías se identifican cinco registros operativos, uno propuesto y uno inexistente. Las correcciones de condición respecto de los CSV originales corresponden a información aclarada por el autor y permanecen identificadas en el procesamiento.
+
+El mismo esquema de registro podría aplicarse a la distribución al incorporar los códigos y atributos de válvulas y otros elementos. Para comprobar ese uso sería necesario disponer de datos reales de distribución y probar el procedimiento con ellos; este documento no constituye todavía una aplicación de captura de campo.
+
+## Referencias
+
+Chaves Ulate, M. (2025, 9 de abril). *Inventario de infraestructura de conducción del acueducto de Cajón de Boruca* [Datos geoespaciales no publicados; archivos de puntos y tuberías]. Aclaraciones posteriores del autor sobre la condición de estructuras y tuberías, sin fecha de inspección indicada.
+
+Universidad de Costa Rica. (2026). *PF-0953 Programación en R: materiales del curso, segundo ciclo 2026*. https://pf0953-programacionr.github.io/2026-ii/
+
+## Declaración de uso de inteligencia artificial
+
+Se utilizó ChatGPT (OpenAI) como apoyo para organizar el documento, revisar la redacción y el código de R para importar, transformar y presentar los registros en tablas y gráficos. Los datos del levantamiento y las aclaraciones sobre el estado de la infraestructura proceden del autor, quien verificó el resultado antes de su entrega.

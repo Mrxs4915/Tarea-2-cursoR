@@ -1,0 +1,8 @@
+﻿id_tramo,descripcion_original,tipo_elemento,diametro_pulg,estado_tramo,condicion_fisica,tipo_afectacion,alcance_afectacion,fecha_revision,observaciones
+1,_Tuberia Propuesta,Tubería,,Propuesto,No aplica,Sin registro,Sin registro,2025-04-09,La afectación y su alcance no están registrados en el archivo de líneas.
+5,_Tub1.5,Tubería,1.5,Sin verificar,Sin verificar,Sin registro,Sin registro,2025-04-09,La afectación y su alcance no están registrados en el archivo de líneas.
+6,_Tub1.5,Tubería,1.5,Sin verificar,Sin verificar,Sin registro,Sin registro,2025-04-09,La afectación y su alcance no están registrados en el archivo de líneas.
+7,_Tub2.5,Tubería,2.5,Sin verificar,Sin verificar,Sin registro,Sin registro,2025-04-09,La afectación y su alcance no están registrados en el archivo de líneas.
+8,_Tub1.5,Tubería,1.5,Sin verificar,Sin verificar,Sin registro,Sin registro,2025-04-09,La afectación y su alcance no están registrados en el archivo de líneas.
+9,_Tuberia Inexistente,Tubería,,Inexistente según la clasificación del archivo,No aplica,Sin registro,Sin registro,2025-04-09,La afectación y su alcance no están registrados en el archivo de líneas.
+10,_Tub1.5,Tubería,1.5,Sin verificar,Sin verificar,Sin registro,Sin registro,2025-04-09,La afectación y su alcance no están registrados en el archivo de líneas.
